@@ -57,8 +57,8 @@ class Store(context: Context) {
                     put("title", a.title)
                     put("dayOfWeek", a.dayOfWeek.value)
                     put("date", a.date?.toString() ?: JSONObject.NULL)
-                    put("start", a.start.toString())
-                    put("end", a.end.toString())
+                    put("start", a.start?.toString() ?: JSONObject.NULL)
+                    put("end", a.end?.toString() ?: JSONObject.NULL)
                     put("location", a.location)
                 })
             }
@@ -88,8 +88,8 @@ class Store(context: Context) {
                     title = a.getString("title"),
                     dayOfWeek = DayOfWeek.of(a.getInt("dayOfWeek")),
                     date = if (a.isNull("date")) null else LocalDate.parse(a.getString("date")),
-                    start = LocalTime.parse(a.getString("start")),
-                    end = LocalTime.parse(a.getString("end")),
+                    start = if (a.isNull("start")) null else LocalTime.parse(a.getString("start")),
+                    end = if (a.isNull("end")) null else LocalTime.parse(a.getString("end")),
                     location = a.optString("location", "")
                 )
             }

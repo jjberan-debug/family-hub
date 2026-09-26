@@ -89,16 +89,24 @@ private fun TimeRow(start: LocalTime, end: LocalTime, onStart: (LocalTime) -> Un
 // ---------------- Kids' activity ----------------
 
 @Composable
-fun ActivityDialog(vm: FamilyViewModel, existing: KidActivity?, defaultDate: LocalDate, onClose: () -> Unit) {
+fun ActivityDialog(
+    vm: FamilyViewModel,
+    existing: KidActivity?,
+    defaultDate: LocalDate,
+    defaultKidId: String?,
+    onClose: () -> Unit
+) {
     val context = LocalContext.current
     val kids = vm.data.kids
-    var kidId by remember { mutableStateOf(existing?.kidId ?: kids.firstOrNull()?.id ?: "") }
+    var kidId by remember { mutableStateOf(existing?.kidId ?: defaultKidId ?: kids.firstOrNull()?.id ?: "") }
     var title by remember { mutableStateOf(existing?.title ?: "") }
     var recurring by remember { mutableStateOf(existing?.isRecurring ?: true) }
     var day by remember { mutableStateOf(existing?.dayOfWeek ?: defaultDate.dayOfWeek) }
     var date by remember { mutableStateOf(existing?.date ?: defaultDate) }
+    // Uniforms, library bags etc. have no time; activities like tennis do.
+    var timed by remember { mutableStateOf(existing?.hasTime ?: false) }
     var start by remember { mutableStateOf(existing?.start ?: LocalTime.of(16, 0)) }
-    var end by remember { mutableStateOf(existing?.end ?: LocalTime.of(17, 0)) }
+    var end by remember { mutableStateOf(existing?.end ?: (existing?.start?.plusHours(1) ?: LocalTime.of(17, 0))) }
     var location by remember { mutableStateOf(existing?.location ?: "") }
     var confirmDelete by remember { mutableStateOf(false) }
 
@@ -106,7 +114,7 @@ fun ActivityDialog(vm: FamilyViewModel, existing: KidActivity?, defaultDate: Loc
 
     AlertDialog(
         onDismissRequest = onClose,
-        title = { Text(if (existing == null) "Kids' activity" else "Edit activity") },
+        title = { Text(if (existing == null) "Kids' item" else "Edit kids' item") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Label("Who")
@@ -124,7 +132,7 @@ fun ActivityDialog(vm: FamilyViewModel, existing: KidActivity?, defaultDate: Loc
                 OutlinedTextField(
                     value = title,
                     onValueChange = { title = it },
-                    placeholder = { Text("e.g. Swimming") },
+                    placeholder = { Text("e.g. Sport uniform, Library bag, Tennis") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences)
@@ -150,8 +158,15 @@ fun ActivityDialog(vm: FamilyViewModel, existing: KidActivity?, defaultDate: Loc
                         Text(date.format(longDate))
                     }
                 }
-                Spacer(Modifier.height(6.dp))
-                TimeRow(start, end, { start = it; if (!end.isAfter(it)) end = it.plusHours(1) }, { end = it })
+                Label("Time")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = !timed, onClick = { timed = false }, label = { Text("No set time") })
+                    FilterChip(selected = timed, onClick = { timed = true }, label = { Text("At a time") })
+                }
+                if (timed) {
+                    Spacer(Modifier.height(6.dp))
+                    TimeRow(start, end, { start = it; if (!end.isAfter(it)) end = it.plusHours(1) }, { end = it })
+                }
                 Label("Where (optional)")
                 OutlinedTextField(
                     value = location,
@@ -163,7 +178,7 @@ fun ActivityDialog(vm: FamilyViewModel, existing: KidActivity?, defaultDate: Loc
                 if (confirmDelete) {
                     Spacer(Modifier.height(12.dp))
                     Text(
-                        if (existing?.isRecurring == true) "Delete this activity from every week?" else "Delete this activity?",
+                        if (existing?.isRecurring == true) "Delete this from every week?" else "Delete this item?",
                         color = MaterialTheme.colorScheme.error
                     )
                 }
@@ -183,8 +198,8 @@ fun ActivityDialog(vm: FamilyViewModel, existing: KidActivity?, defaultDate: Loc
                                 title = title.trim(),
                                 dayOfWeek = if (recurring) day else date.dayOfWeek,
                                 date = if (recurring) null else date,
-                                start = start,
-                                end = end,
+                                start = if (timed) start else null,
+                                end = if (timed) end else null,
                                 location = location.trim()
                             )
                         )

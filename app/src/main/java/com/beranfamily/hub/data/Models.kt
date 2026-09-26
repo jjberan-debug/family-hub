@@ -26,8 +26,9 @@ data class Kid(
 )
 
 /**
- * A kid's activity. If [date] is null it repeats every week on [dayOfWeek];
- * otherwise it is a one-off on [date].
+ * A kid's regular item: an activity, a uniform, something to bring.
+ * If [date] is null it repeats every week on [dayOfWeek]; otherwise it is a one-off on [date].
+ * [start]/[end] are null for untimed items such as "Sport uniform" or "Library bag".
  */
 data class KidActivity(
     val id: String,
@@ -35,11 +36,12 @@ data class KidActivity(
     val title: String,
     val dayOfWeek: DayOfWeek,
     val date: LocalDate?,
-    val start: LocalTime,
-    val end: LocalTime,
+    val start: LocalTime?,
+    val end: LocalTime?,
     val location: String = ""
 ) {
     val isRecurring: Boolean get() = date == null
+    val hasTime: Boolean get() = start != null
 
     fun occursOn(day: LocalDate): Boolean =
         if (date != null) date == day else dayOfWeek == day.dayOfWeek

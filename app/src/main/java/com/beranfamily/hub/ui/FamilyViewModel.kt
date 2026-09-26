@@ -73,12 +73,6 @@ class FamilyViewModel(app: Application) : AndroidViewModel(app) {
     var hasCalendarPermission by mutableStateOf(false)
         private set
 
-    // Filters for the week view (not saved).
-    var hiddenKidIds by mutableStateOf<Set<String>>(emptySet())
-        private set
-    var showCalendarEvents by mutableStateOf(true)
-        private set
-
     val today: LocalDate get() = now.toLocalDate()
     val weekStart: LocalDate
         get() = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY)).plusWeeks(weekOffset.toLong())
@@ -209,37 +203,14 @@ class FamilyViewModel(app: Application) : AndroidViewModel(app) {
         it.copy(hiddenCalendarIds = if (id in it.hiddenCalendarIds) it.hiddenCalendarIds - id else it.hiddenCalendarIds + id)
     }
 
-    // ---------- Week view ----------
-
-    fun toggleKidFilter(kidId: String) {
-        hiddenKidIds = if (kidId in hiddenKidIds) hiddenKidIds - kidId else hiddenKidIds + kidId
-    }
-
-    fun toggleCalendarFilter() {
-        showCalendarEvents = !showCalendarEvents
-    }
+    // ---------- Family calendar (week grid) ----------
 
     fun kid(id: String): Kid? = data.kids.firstOrNull { it.id == id }
 
-    fun itemsFor(day: LocalDate): List<WeekItem> {
+    /** Calendar events for one day of the week grid. Kids' items are shown separately. */
+    fun calendarItemsFor(day: LocalDate): List<WeekItem> {
         val items = mutableListOf<WeekItem>()
-
-        data.activities
-            .filter { it.occursOn(day) && it.kidId !in hiddenKidIds }
-            .forEach { a ->
-                val kid = kid(a.kidId)
-                items += WeekItem(
-                    key = "a-${a.id}",
-                    sortMinutes = a.start.hour * 60 + a.start.minute,
-                    timeLabel = formatTime(a.start),
-                    title = a.title,
-                    subtitle = listOfNotNull(kid?.name, a.location.takeIf { it.isNotBlank() }).joinToString(" · "),
-                    colour = kid?.colour ?: 0xFF888888,
-                    activity = a
-                )
-            }
-
-        if (showCalendarEvents) {
+        run {
             val dayStart = day.atStartOfDay(zone).toInstant().toEpochMilli()
             val dayEnd = day.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
             events
@@ -285,7 +256,14 @@ class FamilyViewModel(app: Application) : AndroidViewModel(app) {
         return items.sortedWith(compareBy({ it.sortMinutes }, { it.title }))
     }
 
-    // ---------- Kids & activities ----------
+    // ---------- Kids' regular items ----------
+
+    /** A kid's items for one day: untimed things (uniform, library bag) first, then by time. */
+    fun kidItemsFor(kidId: String, day: LocalDate): List<KidActivity> =
+        data.activities
+            .filter { it.kidId == kidId && it.occursOn(day) }
+            .sortedWith(compareBy({ it.start != null }, { it.start }, { it.title }))
+
 
     fun updateKid(kid: Kid) = updateData { d ->
         d.copy(kids = d.kids.map { if (it.id == kid.id) kid else it })

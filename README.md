@@ -2,8 +2,8 @@
 
 A wall-tablet dashboard for the family, showing:
 
-- **This week (Mon–Sun):** Google Calendar events and the kids' activities in one grid, colour-coded per kid. Tap the chips above the grid to show or hide a kid or the family calendar.
-- **Kids' activities:** a weekly timetable (e.g. swimming every Tuesday at 4 pm) plus one-offs. Tap a day's header or **Kids' activity** to add one, and tap an activity to edit or delete it.
+- **Family calendar (top):** this week's Google Calendar events, Monday to Sunday. Use the arrows to change week, and tap a day to add an event.
+- **Kids (bottom):** a big card per kid showing **today** in large, easy-to-read text, with **tomorrow** underneath for getting ready the night before. Items are things like *Sport uniform*, *Library bag* or *Tennis 4 pm*. They can repeat every week or be one-offs, with or without a time. Tap **Week** on a card to see and edit that kid's whole week.
 - **Calendar events:** tap **Event** to add one to Google Calendar, or tap an event to see it, open it in the Calendar app, or delete it.
 - **Shopping and To do:** simple checklists. Tap an item to tick it, and use **Clear ticked** to tidy up.
 
