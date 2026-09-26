@@ -85,6 +85,7 @@ class FamilyViewModel(app: Application) : AndroidViewModel(app) {
     val weekDays: List<LocalDate> get() = (0L until 7L).map { weekStart.plusDays(it) }
 
     private val saveLock = Mutex()
+    private var observerRegistered = false
     private var refreshJob: Job? = null
     private val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
         override fun onChange(selfChange: Boolean) = scheduleRefresh()
@@ -93,7 +94,6 @@ class FamilyViewModel(app: Application) : AndroidViewModel(app) {
     init {
         data = store.load()
         checkPermission()
-        app.contentResolver.registerContentObserver(CalendarContract.CONTENT_URI, true, observer)
         // Clock + periodic refresh.
         viewModelScope.launch {
             var minutesSinceRefresh = 0
@@ -115,7 +115,21 @@ class FamilyViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     override fun onCleared() {
-        getApplication<Application>().contentResolver.unregisterContentObserver(observer)
+        if (observerRegistered) {
+            getApplication<Application>().contentResolver.unregisterContentObserver(observer)
+        }
+    }
+
+    /** Watch for calendar changes (e.g. Google sync) — only possible once we have permission. */
+    private fun registerObserverIfNeeded() {
+        if (observerRegistered || !hasCalendarPermission) return
+        try {
+            getApplication<Application>().contentResolver
+                .registerContentObserver(CalendarContract.CONTENT_URI, true, observer)
+            observerRegistered = true
+        } catch (e: SecurityException) {
+            // Fall back to the periodic refresh.
+        }
     }
 
     // ---------- Calendar ----------
@@ -125,6 +139,7 @@ class FamilyViewModel(app: Application) : AndroidViewModel(app) {
         hasCalendarPermission =
             ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED &&
                 ContextCompat.checkSelfPermission(ctx, Manifest.permission.WRITE_CALENDAR) == PackageManager.PERMISSION_GRANTED
+        registerObserverIfNeeded()
         scheduleRefresh(0)
     }
 
