@@ -166,27 +166,35 @@ fun SettingsDialog(vm: FamilyViewModel, onRequestCalendarPermission: () -> Unit,
                         )
                     } else {
                         vm.calendars.forEach { cal ->
+                            val shown = vm.isShown(cal)
+                            val status = when {
+                                !cal.synced -> "not syncing to this tablet · tick to turn on"
+                                !cal.visible -> "hidden in the Google Calendar app · tick to show"
+                                !cal.writable -> "view only"
+                                else -> ""
+                            }
                             Row(
-                                Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable { vm.toggleCalendarHidden(cal.id) },
+                                Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable { vm.toggleCalendar(cal) },
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Checkbox(checked = cal.id !in vm.data.hiddenCalendarIds, onCheckedChange = { vm.toggleCalendarHidden(cal.id) })
+                                Checkbox(checked = shown, onCheckedChange = { vm.toggleCalendar(cal) })
                                 ColourDot(Color(cal.colour))
                                 Spacer(Modifier.width(10.dp))
                                 Column(Modifier.weight(1f)) {
                                     Text(cal.name)
                                     Text(
-                                        cal.account + if (cal.writable) "" else " · view only",
+                                        cal.account + if (status.isBlank()) "" else " · $status",
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        color = if (!cal.onTablet) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                             }
                         }
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "Missing a calendar (e.g. one Donna shared)? Open the Google Calendar app on this tablet, " +
-                                "tick that calendar and turn on Sync for it.",
+                            "Ticking a calendar that isn't on this tablet yet turns on syncing for it. Its events can take a " +
+                                "minute or two to arrive; use the refresh button at the top to hurry it along. " +
+                                "Calendars from Outlook or iCloud only appear if that account is added to this tablet.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

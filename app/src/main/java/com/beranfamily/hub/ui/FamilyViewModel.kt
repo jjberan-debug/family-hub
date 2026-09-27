@@ -164,7 +164,55 @@ class FamilyViewModel(app: Application) : AndroidViewModel(app) {
         scheduleRefresh(0)
     }
 
-    val writableCalendars: List<CalendarInfo> get() = calendars.filter { it.writable }
+    val writableCalendars: List<CalendarInfo> get() = calendars.filter { it.writable && it.onTablet }
+
+    /** Calendars whose events appear on the dashboard. */
+    fun isShown(cal: CalendarInfo): Boolean = cal.onTablet && cal.id !in data.hiddenCalendarIds
+
+    private val shownCalendarIds: Set<Long> get() = calendars.filter { isShown(it) }.map { it.id }.toSet()
+
+    /**
+     * Ticking a calendar that is hidden or not syncing on this tablet switches it on
+     * (as the Google Calendar app would) and asks Google to sync it straight away.
+     */
+    fun toggleCalendar(cal: CalendarInfo) {
+        if (isShown(cal)) {
+            updateData { it.copy(hiddenCalendarIds = it.hiddenCalendarIds + cal.id) }
+            return
+        }
+        updateData { it.copy(hiddenCalendarIds = it.hiddenCalendarIds - cal.id) }
+        if (!cal.onTablet) {
+            viewModelScope.launch {
+                withContext(Dispatchers.IO) {
+                    calendarRepo.enableCalendar(cal.id)
+                    calendarRepo.requestSync(listOf(cal.account to cal.accountType))
+                }
+                scheduleRefresh(0)
+                delay(5_000)
+                scheduleRefresh(0)
+            }
+        }
+    }
+
+    var syncing by mutableStateOf(false)
+        private set
+
+    /** "Refresh" button: ask Google to sync every calendar account now, then reload. */
+    fun syncNow() {
+        if (!hasCalendarPermission || syncing) return
+        syncing = true
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                calendarRepo.requestSync(calendars.map { it.account to it.accountType }.toSet())
+            }
+            scheduleRefresh(0)
+            delay(4_000)
+            refreshCalendar()
+            delay(4_000)
+            refreshCalendar()
+            syncing = false
+        }
+    }
 
     val defaultCalendar: CalendarInfo?
         get() = writableCalendars.firstOrNull { it.id == data.defaultCalendarId }
@@ -199,9 +247,7 @@ class FamilyViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun toggleCalendarHidden(id: Long) = updateData {
-        it.copy(hiddenCalendarIds = if (id in it.hiddenCalendarIds) it.hiddenCalendarIds - id else it.hiddenCalendarIds + id)
-    }
+
 
     // ---------- Family calendar (week grid) ----------
 
@@ -210,11 +256,12 @@ class FamilyViewModel(app: Application) : AndroidViewModel(app) {
     /** Calendar events for one day of the week grid. Kids' items are shown separately. */
     fun calendarItemsFor(day: LocalDate): List<WeekItem> {
         val items = mutableListOf<WeekItem>()
+        val shown = shownCalendarIds
         run {
             val dayStart = day.atStartOfDay(zone).toInstant().toEpochMilli()
             val dayEnd = day.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
             events
-                .filter { it.calendarId !in data.hiddenCalendarIds }
+                .filter { it.calendarId in shown }
                 .forEach { e ->
                     if (e.allDay) {
                         val s = Instant.ofEpochMilli(e.beginMillis).atZone(ZoneOffset.UTC).toLocalDate()

@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.CheckCircle
@@ -80,15 +81,21 @@ sealed interface DialogState {
     data object None : DialogState
     data class AddEvent(val date: LocalDate) : DialogState
     data class EventDetails(val event: CalEvent) : DialogState
+    data class DayEvents(val date: LocalDate) : DialogState
     data class EditActivity(val activity: KidActivity?, val date: LocalDate, val kidId: String? = null) : DialogState
-    data class KidWeek(val kidId: String) : DialogState
     data object Settings : DialogState
 }
 
 private val headerDate = DateTimeFormatter.ofPattern("EEEE d MMMM", Locale.ENGLISH)
 private val shortDate = DateTimeFormatter.ofPattern("d MMM", Locale.ENGLISH)
 private val dayName = DateTimeFormatter.ofPattern("EEE", Locale.ENGLISH)
-private val fullDayName = DateTimeFormatter.ofPattern("EEEE", Locale.ENGLISH)
+private val fullDate = DateTimeFormatter.ofPattern("EEEE d MMMM", Locale.ENGLISH)
+
+/** Width of the label column on the left of the planner (row names). */
+private val GUTTER = 96.dp
+private val GAP = 6.dp
+/** How many calendar events a day cell shows before "+N more". */
+private const val MAX_EVENTS_IN_CELL = 3
 
 @Composable
 fun Dashboard(vm: FamilyViewModel, onRequestCalendarPermission: () -> Unit) {
@@ -114,24 +121,15 @@ fun Dashboard(vm: FamilyViewModel, onRequestCalendarPermission: () -> Unit) {
             }
             Spacer(Modifier.height(10.dp))
             Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                Column(Modifier.weight(1f).fillMaxHeight()) {
-                    SectionLabel("Family calendar")
-                    WeekGrid(
-                        vm = vm,
-                        modifier = Modifier.weight(0.45f).fillMaxWidth(),
-                        onItemClick = { item -> item.event?.let { dialog = DialogState.EventDetails(it) } },
-                        onDayClick = { day -> if (vm.hasCalendarPermission) dialog = DialogState.AddEvent(day) }
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    SectionLabel("Kids · today and tomorrow")
-                    KidsRow(
-                        vm = vm,
-                        modifier = Modifier.weight(0.55f).fillMaxWidth(),
-                        onItemClick = { a -> dialog = DialogState.EditActivity(a, vm.today) },
-                        onWeek = { kidId -> dialog = DialogState.KidWeek(kidId) },
-                        onAdd = { kidId -> dialog = DialogState.EditActivity(null, vm.today, kidId) }
-                    )
-                }
+                Planner(
+                    vm = vm,
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                    onEventClick = { dialog = DialogState.EventDetails(it) },
+                    onMoreClick = { day -> dialog = DialogState.DayEvents(day) },
+                    onCalendarDayClick = { day -> if (vm.hasCalendarPermission) dialog = DialogState.AddEvent(day) },
+                    onKidItemClick = { a, day -> dialog = DialogState.EditActivity(a, day) },
+                    onKidCellClick = { kidId, day -> dialog = DialogState.EditActivity(null, day, kidId) }
+                )
                 Column(
                     Modifier.width(330.dp).fillMaxHeight(),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
@@ -147,28 +145,16 @@ fun Dashboard(vm: FamilyViewModel, onRequestCalendarPermission: () -> Unit) {
         DialogState.None -> Unit
         is DialogState.AddEvent -> AddEventDialog(vm, d.date) { dialog = DialogState.None }
         is DialogState.EventDetails -> EventDetailsDialog(vm, d.event) { dialog = DialogState.None }
-        is DialogState.EditActivity -> ActivityDialog(vm, d.activity, d.date, d.kidId) { dialog = DialogState.None }
-        is DialogState.KidWeek -> KidWeekDialog(
+        is DialogState.DayEvents -> DayEventsDialog(
             vm = vm,
-            kidId = d.kidId,
-            onEdit = { a -> dialog = DialogState.EditActivity(a, vm.today) },
-            onAdd = { day -> dialog = DialogState.EditActivity(null, day, d.kidId) },
+            day = d.date,
+            onEventClick = { dialog = DialogState.EventDetails(it) },
+            onAdd = { dialog = DialogState.AddEvent(d.date) },
             onClose = { dialog = DialogState.None }
         )
+        is DialogState.EditActivity -> ActivityDialog(vm, d.activity, d.date, d.kidId) { dialog = DialogState.None }
         DialogState.Settings -> SettingsDialog(vm, onRequestCalendarPermission) { dialog = DialogState.None }
     }
-}
-
-@Composable
-private fun SectionLabel(text: String) {
-    Text(
-        text.uppercase(Locale.ENGLISH),
-        style = MaterialTheme.typography.labelMedium,
-        fontWeight = FontWeight.Bold,
-        letterSpacing = 1.2.sp,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(start = 4.dp, bottom = 6.dp)
-    )
 }
 
 // ---------------- Header ----------------
@@ -186,7 +172,7 @@ private fun Header(vm: FamilyViewModel, onAddEvent: () -> Unit, onAddActivity: (
             )
         }
 
-        // Week navigation (family calendar)
+        // Week navigation
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { vm.changeWeek(-1) }) {
                 Icon(Icons.Filled.KeyboardArrowLeft, contentDescription = "Previous week")
@@ -233,6 +219,9 @@ private fun Header(vm: FamilyViewModel, onAddEvent: () -> Unit, onAddActivity: (
             Spacer(Modifier.width(6.dp))
             Text("Event")
         }
+        IconButton(onClick = { vm.syncNow() }, enabled = vm.hasCalendarPermission && !vm.syncing) {
+            Icon(Icons.Filled.Refresh, contentDescription = "Sync calendar now")
+        }
         IconButton(onClick = onSettings) {
             Icon(Icons.Filled.Settings, contentDescription = "Settings")
         }
@@ -253,334 +242,269 @@ private fun PermissionBanner(onAllow: () -> Unit) {
     }
 }
 
-// ---------------- Family calendar week grid ----------------
+// ---------------- Planner: calendar row + one row per kid, lined up by day ----------------
 
 @Composable
-private fun WeekGrid(
+private fun Planner(
     vm: FamilyViewModel,
     modifier: Modifier,
-    onItemClick: (WeekItem) -> Unit,
-    onDayClick: (LocalDate) -> Unit
+    onEventClick: (CalEvent) -> Unit,
+    onMoreClick: (LocalDate) -> Unit,
+    onCalendarDayClick: (LocalDate) -> Unit,
+    onKidItemClick: (KidActivity, LocalDate) -> Unit,
+    onKidCellClick: (String, LocalDate) -> Unit
 ) {
-    Row(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        vm.weekDays.forEach { day ->
-            DayColumn(
-                day = day,
-                isToday = day == vm.today,
-                isPast = day.isBefore(vm.today),
-                dayItems = vm.calendarItemsFor(day),
-                modifier = Modifier.weight(1f).fillMaxHeight(),
-                onItemClick = onItemClick,
-                onHeaderClick = { onDayClick(day) }
-            )
+    val days = vm.weekDays
+    val today = vm.today
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(GAP)) {
+        // Day headers
+        Row(Modifier.fillMaxWidth().height(36.dp), horizontalArrangement = Arrangement.spacedBy(GAP)) {
+            Spacer(Modifier.width(GUTTER))
+            days.forEach { day -> DayHeader(day, day == today, Modifier.weight(1f).fillMaxHeight()) }
+        }
+
+        // Family calendar
+        Row(Modifier.fillMaxWidth().weight(1.3f), horizontalArrangement = Arrangement.spacedBy(GAP)) {
+            Box(Modifier.width(GUTTER).fillMaxHeight().padding(start = 4.dp, top = 8.dp)) {
+                Text(
+                    "FAMILY\nCALENDAR",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.2.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            days.forEach { day ->
+                CalendarCell(
+                    dayItems = vm.calendarItemsFor(day),
+                    isToday = day == today,
+                    isPast = day.isBefore(today),
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                    onEventClick = onEventClick,
+                    onMoreClick = { onMoreClick(day) },
+                    onEmptyClick = { onCalendarDayClick(day) }
+                )
+            }
+        }
+
+        // Kids
+        if (vm.data.kids.isEmpty()) {
+            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                Text("Add your kids in Settings", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        vm.data.kids.forEach { kid ->
+            val colour = Color(kid.colour)
+            Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(GAP)) {
+                Row(
+                    Modifier.width(GUTTER).fillMaxHeight().padding(start = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(Modifier.size(12.dp).clip(CircleShape).background(colour))
+                    Spacer(Modifier.width(7.dp))
+                    Text(
+                        kid.name,
+                        fontSize = 19.sp,
+                        lineHeight = 22.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                days.forEach { day ->
+                    KidCell(
+                        items = vm.kidItemsFor(kid.id, day),
+                        colour = colour,
+                        isToday = day == today,
+                        isPast = day.isBefore(today),
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        onItemClick = { onKidItemClick(it, day) },
+                        onEmptyClick = { onKidCellClick(kid.id, day) }
+                    )
+                }
+            }
         }
     }
 }
 
 @Composable
-private fun DayColumn(
-    day: LocalDate,
+private fun DayHeader(day: LocalDate, isToday: Boolean, modifier: Modifier) {
+    val accent = MaterialTheme.colorScheme.primary
+    Row(
+        modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (isToday) accent else Color.Transparent)
+            .padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            day.format(dayName).uppercase(Locale.ENGLISH),
+            style = MaterialTheme.typography.labelLarge,
+            color = if (isToday) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            day.dayOfMonth.toString(),
+            fontSize = 20.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = if (isToday) Color.White else MaterialTheme.colorScheme.onSurface
+        )
+    }
+}
+
+@Composable
+private fun CalendarCell(
+    dayItems: List<WeekItem>,
     isToday: Boolean,
     isPast: Boolean,
-    dayItems: List<WeekItem>,
     modifier: Modifier,
-    onItemClick: (WeekItem) -> Unit,
-    onHeaderClick: () -> Unit
+    onEventClick: (CalEvent) -> Unit,
+    onMoreClick: () -> Unit,
+    onEmptyClick: () -> Unit
 ) {
     val accent = MaterialTheme.colorScheme.primary
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(16.dp),
-        color = if (isToday) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.surface.copy(alpha = if (isPast) 0.55f else 0.85f),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = if (isToday) 1f else if (isPast) 0.55f else 0.85f),
         border = BorderStroke(if (isToday) 2.dp else 1.dp, if (isToday) accent else MaterialTheme.colorScheme.outline)
     ) {
-        Column {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onHeaderClick)
-                    .background(if (isToday) accent else Color.Transparent)
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.Bottom
-            ) {
-                Text(
-                    day.format(dayName).uppercase(Locale.ENGLISH),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = if (isToday) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    day.dayOfMonth.toString(),
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (isToday) Color.White else MaterialTheme.colorScheme.onSurface
-                )
-            }
+        Column(
+            Modifier
+                .fillMaxSize()
+                .clickable(onClick = onEmptyClick)
+                .verticalScroll(rememberScrollState())
+                .padding(5.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
             if (dayItems.isEmpty()) {
-                Box(Modifier.fillMaxSize().clickable(onClick = onHeaderClick), contentAlignment = Alignment.Center) {
-                    Text("—", color = MaterialTheme.colorScheme.outline)
-                }
-            } else {
-                LazyColumn(
-                    Modifier.fillMaxSize().padding(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    items(dayItems, key = { it.key }) { item ->
-                        WeekItemCard(item, faded = isPast) { onItemClick(item) }
-                    }
-                }
+                Text("—", color = MaterialTheme.colorScheme.outline, modifier = Modifier.padding(4.dp))
+            }
+            val visible = if (dayItems.size > MAX_EVENTS_IN_CELL) dayItems.take(MAX_EVENTS_IN_CELL) else dayItems
+            visible.forEach { item ->
+                EventChip(item, faded = isPast) { item.event?.let(onEventClick) }
+            }
+            val hidden = dayItems.size - visible.size
+            if (hidden > 0) {
+                Text(
+                    "+$hidden more",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = accent,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable(onClick = onMoreClick)
+                        .padding(horizontal = 4.dp, vertical = 4.dp)
+                )
             }
         }
     }
 }
 
 @Composable
-private fun WeekItemCard(item: WeekItem, faded: Boolean, onClick: () -> Unit) {
+private fun EventChip(item: WeekItem, faded: Boolean, onClick: () -> Unit) {
     val colour = Color(item.colour)
     Row(
         Modifier
             .fillMaxWidth()
             .height(IntrinsicSize.Min)
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(8.dp))
             .background(colour.copy(alpha = if (faded) 0.08f else 0.15f))
             .clickable(onClick = onClick)
     ) {
-        Box(Modifier.width(5.dp).fillMaxHeight().background(colour))
-        Column(Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
-            Text(
-                item.timeLabel,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+        Box(Modifier.width(4.dp).fillMaxHeight().background(colour))
+        Column(Modifier.padding(horizontal = 6.dp, vertical = 3.dp)) {
+            Text(item.timeLabel, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(
                 item.title,
-                style = MaterialTheme.typography.bodyMedium,
+                fontSize = 13.sp,
+                lineHeight = 17.sp,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
-            if (item.subtitle.isNotBlank()) {
-                Text(
-                    item.subtitle,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-    }
-}
-
-// ---------------- Kids' cards ----------------
-
-@Composable
-private fun KidsRow(
-    vm: FamilyViewModel,
-    modifier: Modifier,
-    onItemClick: (KidActivity) -> Unit,
-    onWeek: (String) -> Unit,
-    onAdd: (String) -> Unit
-) {
-    if (vm.data.kids.isEmpty()) {
-        Box(modifier, contentAlignment = Alignment.Center) {
-            Text("Add your kids in Settings", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        return
-    }
-    Row(modifier, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        vm.data.kids.forEach { kid ->
-            KidCard(
-                name = kid.name,
-                colour = Color(kid.colour),
-                today = vm.today,
-                todayItems = vm.kidItemsFor(kid.id, vm.today),
-                tomorrowItems = vm.kidItemsFor(kid.id, vm.today.plusDays(1)),
-                modifier = Modifier.weight(1f).fillMaxHeight(),
-                onItemClick = onItemClick,
-                onWeek = { onWeek(kid.id) },
-                onAdd = { onAdd(kid.id) }
-            )
         }
     }
 }
 
 @Composable
-private fun KidCard(
-    name: String,
+private fun KidCell(
+    items: List<KidActivity>,
     colour: Color,
-    today: LocalDate,
-    todayItems: List<KidActivity>,
-    tomorrowItems: List<KidActivity>,
+    isToday: Boolean,
+    isPast: Boolean,
     modifier: Modifier,
     onItemClick: (KidActivity) -> Unit,
-    onWeek: () -> Unit,
-    onAdd: () -> Unit
+    onEmptyClick: () -> Unit
 ) {
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(20.dp),
-        color = colour.copy(alpha = 0.08f).compositeOver(Color.White),
-        border = BorderStroke(2.dp, colour.copy(alpha = 0.55f))
+        shape = RoundedCornerShape(12.dp),
+        color = colour.copy(alpha = if (isPast) 0.04f else 0.08f).compositeOver(MaterialTheme.colorScheme.background),
+        border = if (isToday) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null
     ) {
-        Column {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .background(colour)
-                    .padding(start = 18.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    name,
-                    fontSize = 26.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-                TextButton(onClick = onWeek, colors = ButtonDefaults.textButtonColors(contentColor = Color.White)) {
-                    Text("Week")
-                }
-                IconButton(onClick = onAdd) {
-                    Icon(Icons.Filled.Add, contentDescription = "Add for $name", tint = Color.White)
-                }
+        Column(
+            Modifier
+                .fillMaxSize()
+                .clickable(onClick = onEmptyClick)
+                .verticalScroll(rememberScrollState())
+                .padding(5.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            if (items.isEmpty()) {
+                Text("—", color = MaterialTheme.colorScheme.outline, modifier = Modifier.padding(4.dp))
             }
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 18.dp, vertical = 12.dp)
-            ) {
-                DayHeading("Today · ${today.format(fullDayName)}", colour)
-                if (todayItems.isEmpty()) {
+            items.forEach { a ->
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(colour.copy(alpha = if (isPast) 0.12f else 0.22f))
+                        .clickable { onItemClick(a) }
+                        .padding(horizontal = 7.dp, vertical = 4.dp)
+                ) {
                     Text(
-                        "Nothing special today",
-                        fontSize = 20.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(vertical = 6.dp)
+                        a.title,
+                        fontSize = 16.sp,
+                        lineHeight = 19.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
-                } else {
-                    todayItems.forEach { KidItemRow(it, big = true) { onItemClick(it) } }
-                }
-                Spacer(Modifier.height(10.dp))
-                HorizontalDivider(color = colour.copy(alpha = 0.3f))
-                Spacer(Modifier.height(10.dp))
-                DayHeading("Tomorrow · ${today.plusDays(1).format(fullDayName)}", MaterialTheme.colorScheme.onSurfaceVariant)
-                if (tomorrowItems.isEmpty()) {
-                    Text("Nothing special", fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else {
-                    tomorrowItems.forEach { KidItemRow(it, big = false) { onItemClick(it) } }
+                    val t = kidTimeLabel(a)
+                    if (t.isNotBlank()) {
+                        Text(t, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
         }
     }
 }
 
-@Composable
-private fun DayHeading(text: String, colour: Color) {
-    Text(
-        text.uppercase(Locale.ENGLISH),
-        fontSize = 14.sp,
-        fontWeight = FontWeight.Bold,
-        letterSpacing = 1.sp,
-        color = colour,
-        modifier = Modifier.padding(bottom = 4.dp)
-    )
-}
-
-fun kidTimeLabel(a: KidActivity): String {
-    val start = a.start ?: return ""
-    val end = a.end
-    return if (end != null && end.isAfter(start)) {
-        "${FamilyViewModel.formatTime(start)} – ${FamilyViewModel.formatTime(end)}"
-    } else {
-        FamilyViewModel.formatTime(start)
-    }
-}
+/** Start time only, to keep the planner cells compact. */
+fun kidTimeLabel(a: KidActivity): String = a.start?.let { FamilyViewModel.formatTime(it) } ?: ""
 
 @Composable
-private fun KidItemRow(item: KidActivity, big: Boolean, onClick: () -> Unit) {
-    val detail = listOf(kidTimeLabel(item), item.location).filter { it.isNotBlank() }.joinToString(" · ")
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick)
-            .padding(vertical = if (big) 6.dp else 3.dp)
-    ) {
-        Text(
-            item.title,
-            fontSize = if (big) 26.sp else 18.sp,
-            lineHeight = if (big) 30.sp else 22.sp,
-            fontWeight = if (big) FontWeight.SemiBold else FontWeight.Medium,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        if (detail.isNotBlank()) {
-            Text(
-                detail,
-                fontSize = if (big) 18.sp else 14.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
-
-@Composable
-private fun KidWeekDialog(
+private fun DayEventsDialog(
     vm: FamilyViewModel,
-    kidId: String,
-    onEdit: (KidActivity) -> Unit,
-    onAdd: (LocalDate) -> Unit,
+    day: LocalDate,
+    onEventClick: (CalEvent) -> Unit,
+    onAdd: () -> Unit,
     onClose: () -> Unit
 ) {
-    val kid = vm.kid(kidId)
-    if (kid == null) {
-        LaunchedEffect(Unit) { onClose() }
-        return
-    }
-    val colour = Color(kid.colour)
-    val monday = vm.today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+    val dayItems = vm.calendarItemsFor(day)
     AlertDialog(
         onDismissRequest = onClose,
-        title = { Text("${kid.name}'s week") },
+        title = { Text(day.format(fullDate)) },
         text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                (0L until 7L).map { monday.plusDays(it) }.forEach { day ->
-                    val isToday = day == vm.today
-                    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-                        Text(
-                            day.format(fullDayName),
-                            fontWeight = if (isToday) FontWeight.Bold else FontWeight.Medium,
-                            color = if (isToday) colour else MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.width(110.dp).clickable { onAdd(day) }
-                        )
-                        Column(Modifier.weight(1f)) {
-                            val dayItems = vm.kidItemsFor(kidId, day)
-                            if (dayItems.isEmpty()) {
-                                Text("—", color = MaterialTheme.colorScheme.outline)
-                            }
-                            dayItems.forEach { a ->
-                                val t = kidTimeLabel(a)
-                                Text(
-                                    if (t.isBlank()) a.title else "${a.title}  ·  $t",
-                                    modifier = Modifier.fillMaxWidth().clickable { onEdit(a) }.padding(vertical = 2.dp)
-                                )
-                            }
-                        }
-                    }
-                    HorizontalDivider()
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (dayItems.isEmpty()) Text("Nothing in the calendar.")
+                dayItems.forEach { item ->
+                    EventChip(item, faded = false) { item.event?.let(onEventClick) }
                 }
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Tap an item to change it, or a day to add something.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
             }
         },
-        confirmButton = { Button(onClick = { onAdd(vm.today) }) { Text("Add") } },
+        confirmButton = { Button(onClick = onAdd, enabled = vm.hasCalendarPermission) { Text("Add event") } },
         dismissButton = { TextButton(onClick = onClose) { Text("Close") } }
     )
 }

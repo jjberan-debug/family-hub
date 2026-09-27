@@ -1,8 +1,11 @@
 package com.beranfamily.hub.data
 
+import android.accounts.Account
+import android.content.ContentResolver
 import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
+import android.os.Bundle
 import android.provider.CalendarContract
 import android.util.Log
 import java.time.LocalDate
@@ -18,6 +21,7 @@ class CalendarRepo(private val context: Context) {
 
     private val resolver get() = context.contentResolver
 
+    /** Every calendar the tablet knows about, including ones that are hidden or not syncing. */
     fun calendars(): List<CalendarInfo> {
         val projection = arrayOf(
             CalendarContract.Calendars._ID,
@@ -25,20 +29,23 @@ class CalendarRepo(private val context: Context) {
             CalendarContract.Calendars.ACCOUNT_NAME,
             CalendarContract.Calendars.CALENDAR_COLOR,
             CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL,
-            CalendarContract.Calendars.VISIBLE
+            CalendarContract.Calendars.VISIBLE,
+            CalendarContract.Calendars.SYNC_EVENTS,
+            CalendarContract.Calendars.ACCOUNT_TYPE
         )
         val result = mutableListOf<CalendarInfo>()
         try {
             resolver.query(CalendarContract.Calendars.CONTENT_URI, projection, null, null, null)?.use { c ->
                 while (c.moveToNext()) {
-                    val visible = c.getInt(5) == 1
-                    if (!visible) continue
                     result += CalendarInfo(
                         id = c.getLong(0),
                         name = c.getString(1) ?: "Calendar",
                         account = c.getString(2) ?: "",
+                        accountType = c.getString(7) ?: "",
                         colour = c.getInt(3),
-                        writable = c.getInt(4) >= CalendarContract.Calendars.CAL_ACCESS_CONTRIBUTOR
+                        writable = c.getInt(4) >= CalendarContract.Calendars.CAL_ACCESS_CONTRIBUTOR,
+                        visible = c.getInt(5) == 1,
+                        synced = c.isNull(6) || c.getInt(6) == 1
                     )
                 }
             }
@@ -46,6 +53,35 @@ class CalendarRepo(private val context: Context) {
             Log.w("FamilyHub", "No calendar permission", e)
         }
         return result.sortedWith(compareBy({ it.account }, { it.name }))
+    }
+
+    /** Turns a calendar on for this tablet (ticked and syncing), as the Google Calendar app would. */
+    fun enableCalendar(calendarId: Long): Boolean = try {
+        val values = ContentValues().apply {
+            put(CalendarContract.Calendars.VISIBLE, 1)
+            put(CalendarContract.Calendars.SYNC_EVENTS, 1)
+        }
+        resolver.update(
+            ContentUris.withAppendedId(CalendarContract.Calendars.CONTENT_URI, calendarId), values, null, null
+        ) > 0
+    } catch (e: Exception) {
+        Log.e("FamilyHub", "Could not enable calendar", e)
+        false
+    }
+
+    /** Asks Android to sync the given accounts' calendars with Google now. */
+    fun requestSync(accounts: Collection<Pair<String, String>>) {
+        accounts.filter { it.second.isNotBlank() && it.second != CalendarContract.ACCOUNT_TYPE_LOCAL }.forEach { (name, type) ->
+            try {
+                val extras = Bundle().apply {
+                    putBoolean(ContentResolver.SYNC_EXTRAS_MANUAL, true)
+                    putBoolean(ContentResolver.SYNC_EXTRAS_EXPEDITED, true)
+                }
+                ContentResolver.requestSync(Account(name, type), CalendarContract.AUTHORITY, extras)
+            } catch (e: Exception) {
+                Log.w("FamilyHub", "Could not request sync", e)
+            }
+        }
     }
 
     /** All event occurrences (recurring ones expanded) between the two dates, end exclusive. */

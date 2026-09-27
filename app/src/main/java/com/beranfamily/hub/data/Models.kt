@@ -77,9 +77,16 @@ data class CalendarInfo(
     val id: Long,
     val name: String,
     val account: String,
+    val accountType: String,
     val colour: Int,
-    val writable: Boolean
-)
+    val writable: Boolean,
+    /** Ticked in the Google Calendar app on this tablet. */
+    val visible: Boolean,
+    /** Events are being synced to this tablet. */
+    val synced: Boolean
+) {
+    val onTablet: Boolean get() = visible && synced
+}
 
 /** One occurrence of a Google Calendar event. */
 data class CalEvent(
